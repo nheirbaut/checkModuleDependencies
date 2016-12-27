@@ -1,0 +1,290 @@
+#!/bin/bash
+
+#--------------------------------------------------------------------------
+# Global variable settings
+#--------------------------------------------------------------------------
+declare -A ModuleDependencies
+declare -a UndependDirs
+
+Compiler=
+CompilerFlags=
+ConfigFile=
+HeadersToAlwaysInclude=
+IncludeDirs=
+LogFile=
+ModuleDir=
+ScriptName=$(basename "$0")
+ShowDependencyFrequency=0
+Version=1.0.0
+
+#--------------------------------------------------------------------------
+# Local functions
+#--------------------------------------------------------------------------
+
+#===  FUNCTION  ===========================================================
+#         NAME: read_configuration
+#  DESCRIPTION: Read the configuration.
+#==========================================================================
+read_configuration ()
+{
+  while read key value
+  do
+    # The data must come in pairs
+    if [[ ! -z $key && -z $value ]]
+    then
+      echo "ERROR: ${ScriptName}: ${ConfigFile} has incomplete key value pair. Exiting..."
+      exit 1
+    fi
+
+    case $key in
+      ^\#*)
+        # Any line beginning with a '#' is considered a comment and is
+        # skipped
+        continue
+        ;;
+      include:)
+        HeadersToAlwaysInclude="$HeadersToAlwaysInclude -include $value"
+        ;;
+      includedir:)
+        IncludeDirs="$IncludeDirs -I$value"
+        ;;
+      compiler:)
+        Compiler=$value
+        ;;
+      cflags:)
+        CompilerFlags=$value
+        ;;
+      dependency:)
+        read module dependencies <<< $value
+        ModuleDependencies[${module%:}]=$dependencies
+        ;;
+      moduledir:)
+        ModuleDir=$value
+        ;;
+      undepend:)
+        UndependDirs[${#UndependDirs[@]}]=$value
+        ;;
+    esac
+  done < "$ConfigFile"
+}
+
+#===  FUNCTION  ===========================================================
+#         NAME: validate_configuration
+#  DESCRIPTION: validate the data given in the configuration file.
+#==========================================================================
+validate_configuration ()
+{
+  [ -z "$ModuleDir" ] && { echo "ERROR: $ScriptName: No module directory given in configuration file" >&2; exit 1; }
+  [ ! -d "$ModuleDir" ] && { echo "ERROR: $ScriptName: The module directory \"$ModuleDir\" does not exist" >&2; exit 1; }
+  [ -z "$Compiler" ] && { echo "ERROR: $ScriptName: The compiler definition is missing" >&2; exit 1; }
+}
+
+#===  FUNCTION  ===========================================================
+#         NAME: check_all_modules
+#  DESCRIPTION: Test for all the defined modules if the found dependencies
+#               are allowed.
+#==========================================================================
+check_all_modules ()
+{
+  for module in "${!ModuleDependencies[@]}"
+  do
+    check_module_dependency "$module" ${ModuleDependencies[$module]}
+  done
+}
+
+#===  FUNCTION  ===========================================================
+#         NAME: check_module_dependency
+#  DESCRIPTION: Check for the given modules if it only depends on the
+#               given dependencies.
+# PARAMETER  1: The module to check the dependency for.
+# PARAMETER  2: The first module dependency.
+# PARAMETER  N: The last module dependency. N is optional and the last in
+#               the list that starts with PARAMETER 2.
+#==========================================================================
+check_module_dependency ()
+{
+  local module="$1"
+  shift
+  local allowedDependencies="$@"
+
+  local sourceFiles=$(find $ModuleDir/$module -name '*.cpp' 2>/dev/null)
+  #local sourceFiles=$(find $ModuleDir/$module -name '*.c' 2>/dev/null)
+
+  local -a actualModuleDependencies
+  local -A dependingModuleFrequencies
+
+  for file in $sourceFiles
+  do
+    local hasDependency=1
+
+    # TODO: It should be possible to switch this off or on
+    local LocalIncludePath=$(dirname $file)
+
+    for undependDir in "${UndependDirs[@]}"
+    do
+      local UndependDirAsRegexp="^$ModuleDir/$undependDir/"
+      if [[ $file =~ $UndependDirAsRegexp ]]
+      then
+        hasDependency=0
+        break
+      fi
+    done
+
+    [[ $hasDependency -eq 0 ]] && continue
+
+    while read -r foundDependency
+    do
+      local foundDependencyAsWholeWordRegexp="\<$foundDependency\>"
+      if [[ ! $allowedDependencies =~ $foundDependencyAsWholeWordRegexp ]]
+      then
+        echo "$file:1: error: Module \"$module\" depends on module \"$foundDependency\" but this dependency is not defined" >&2
+      fi
+
+      if [[ ! ${actualModuleDependencies[@]} =~ $foundDependencyAsWholeWordRegexp ]]
+      then
+        actualModuleDependencies[${#actualModuleDependencies[@]}]=$foundDependency
+      fi
+
+      if [[ $ShowDependencyFrequency -eq 1 ]]
+      then
+        if [[ -z dependingModuleFrequencies[$foundDependency] ]]
+        then
+          dependingModuleFrequencies[$foundDependency]=1
+        else
+          (( ++dependingModuleFrequencies[$foundDependency] ))
+        fi
+      fi
+
+    done < <($Compiler -MM $CompilerFlags $IncludeDirs -I$LocalIncludePath $HeadersToAlwaysInclude $file |\
+             tee -a $LogFile |\
+             grep -v -E '^.*\.o: .*\.cpp' |\
+             grep -v -E '^.*\.o: .*\.h' |\
+             sed -e 's/^ *//' |\
+             sed -e 's/ \\$//' |\
+             sed -e 's/ /\n/g' |\
+             grep "$ModuleDir" |\
+             sed -e 's/^\.\///' |\
+             sed -e 's|^'$ModuleDir'/\(.*\)/.*\.cpp|\1|' |\
+             sed -e 's|^'$ModuleDir'/\(.*\)/.*\.h|\1|' |\
+             grep -v -E '^'$file'$' |\
+             sed -e 's|\(.[^/]*\).*|\1|' |\
+             grep -v -E '^'$module'$' |\
+             sort | uniq)
+  done
+
+  for allowedDependency in $allowedDependencies
+  do
+    local allowedDependencyAsWholeWordRegexp="\<$allowedDependency\>"
+    if [[ ! ${actualModuleDependencies[@]} =~ $allowedDependencyAsWholeWordRegexp ]]
+    then
+      echo "$ConfigFile:1: warning: The dependency on module \"$allowedDependency\" for module \"$module\" can be removed from the configuration" >&2
+    fi
+  done
+
+  if [[ $ShowDependencyFrequency -eq 1 ]]
+  then
+    for m in ${!dependingModuleFrequencies[@]}
+    do
+      echo "$module: $m: ${dependingModuleFrequencies[$m]}" >&2
+    done
+  fi
+}
+
+#===  FUNCTION  ===========================================================
+#         NAME: clear_possible_logfile
+#  DESCRIPTION: If a log file has been defined make sure it exists and is
+#               empty.
+#==========================================================================
+clear_possible_logfile ()
+{
+  [[ ! -z $LogFile ]] && : >$LogFile
+}
+
+#===  FUNCTION  ===========================================================
+#         NAME: show_version
+#  DESCRIPTION: Show the version information.
+#==========================================================================
+show_version ()
+{
+  echo "${ScriptName} version $Version"
+}
+
+#===  FUNCTION  ===========================================================
+#         NAME: show_usage
+#  DESCRIPTION: Display usage information.
+#==========================================================================
+show_usage ()
+{
+  cat << EOF
+
+usage: ${ScriptName} [OPTIONS]
+
+Check dependencies between MDC modules.
+
+Options:
+  -c, --config=FILE     Configuration file to use. MANDATORY.
+  -f, --frequency       Show dependency frequency of modules.
+  -h, --help            Display this help message.
+  -l, --logfile=FILE    A file to write the raw compiler output to.
+  -V, --version         Display version information.
+
+EOF
+}
+
+#--------------------------------------------------------------------------
+# Main section
+#--------------------------------------------------------------------------
+
+#--------------------------------------------------------------------------
+# Process the options provided to the script
+#--------------------------------------------------------------------------
+ARGS=$(getopt \
+  --longoptions=config:,help,frequency,logfile,version \
+  -n ${ScriptName} -- c:fhl:V "$@")
+[ $? != 0 ] && { show_usage; exit 1; }
+eval set -- "$ARGS"
+while [ $# -gt 0 ]
+do
+  case $1 in
+    -c|--config)
+      shift
+      ConfigFile="$1"
+      ;;
+    -f|--frequency)
+      ShowDependencyFrequency=1
+      ;;
+    -h|--help)
+      show_usage
+      exit 0
+      ;;
+    -l|--logfile)
+      shift
+      LogFile="$1"
+      ;;
+    -V|--version)
+      show_version
+      exit 0
+      ;;
+    --)
+      # No more arguments that getopts can parse
+      shift
+      break
+      ;;
+  esac
+  shift
+done
+
+#--------------------------------------------------------------------------
+# Sanity check the options provided by the user
+#--------------------------------------------------------------------------
+[ -z "$ConfigFile" ] && { echo "ERROR: ${ScriptName}: Configuration file MUST be provided" >&2; exit 1; }
+[ ! -r "$ConfigFile" ] && { echo "ERROR: ${ScriptName}: Configuration file \"${ConfigFile}\" does not exist or is not readable" >&2; exit 1; }
+
+#--------------------------------------------------------------------------
+# Process
+#--------------------------------------------------------------------------
+read_configuration
+validate_configuration
+clear_possible_logfile
+check_all_modules
+

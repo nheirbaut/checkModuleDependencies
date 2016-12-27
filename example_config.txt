@@ -1,0 +1,55 @@
+# This is a sample configuration file for the checkModuleDependencies utility.
+
+# The root directory of the MDC module sources
+moduledir: ../../../../modules
+
+# The compiler to use
+compiler: gcc
+
+# Compiler flags necessary for each source file
+cflags: -std=gnu99 -DECOS -DNEW_SB -DPPG_LQC1 -DUSES_BI -DUSES_DCD -DWITH_TEST_INTERFACE
+
+# Header files that should always be included
+include: ../../../../modules/hardware/std_types.h
+
+# Directories that can be used for include files
+includedir: ../../../..
+includedir: ../../../../modules
+includedir: ../../../../modules/hardware/ecos/mpc5123/xe_mpx1
+includedir: ../../../../modules/root_def/ecos
+includedir: ../../../../os
+includedir: ../../../../projects/mpx
+includedir: ../../../../projects/mpx/micro1
+includedir: ../../../../projects/mpx/micro1-i386-linux
+
+# The valid modules for this project and their allowed dependencies
+dependency: aflc:           util ddc_def rekenen          hardware                                                              dal test_interface
+dependency: algbest:        util ddc_def rekenen          hardware                      ppg_code                                dal test_interface
+dependency: bi_core:        util ddc_def rekenen root_def hardware bi_io                                                        dal test_interface
+dependency: bi_io:          util ddc_def                  hardware       bi_core                 tti                            dal test_interface
+dependency: ci:             util ddc_def         root_def hardware                      ppg_code tti monitor patch
+dependency: dal:            util ddc_def         root_def hardware                                   monitor patch
+dependency: ddc_def:        util                 root_def hardware                                   monitor patch
+dependency: eeprom:         util ddc_def         root_def hardware
+dependency: ems:            util ddc_def         root_def hardware                                           patch     recorder
+dependency: hardware:       util ddc_def                                                ppg_code
+dependency: monitor:        util ddc_def         root_def hardware
+dependency: patch:          util ddc_def         root_def hardware               eeprom
+dependency: ppg_code:       util                          hardware
+dependency: recorder:       util ddc_def         root_def hardware                      ppg_code
+dependency: rekenen:        util                          hardware
+dependency: root_def:       util                          hardware
+dependency: sb_ac_dc:       util ddc_def         root_def hardware                                                              dal test_interface
+dependency: swctrl:         util ddc_def rekenen          hardware
+dependency: test_interface: util ddc_def                  hardware                                                              dal
+dependency: tti:                                          hardware
+dependency: util:                ddc_def         root_def hardware               eeprom
+dependency: whoami:         util                 root_def hardware
+dependency: xcheck:         util ddc_def                  hardware
+dependency: web:            util ddc_def                  hardware                                                              dal
+
+# Module directories on which the project does not depend (relative to 'moduledir')
+undepend: hardware/chaos
+undepend: hardware/nos
+undepend: root_def/chaos
+
